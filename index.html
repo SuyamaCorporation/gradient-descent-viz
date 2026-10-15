@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gradient Descent Optimizer Path Visualizer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-4xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-2 text-blue-400">Gradient Descent Path Visualizer</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">Watch SGD, Momentum, and Adam navigate loss landscapes</p>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+    <div>
+      <label for="landscape" class="block text-xs text-gray-400 mb-1">Loss Landscape</label>
+      <select id="landscape" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
+        <option value="bowl">Bowl (Convex)</option>
+        <option value="saddle">Saddle Point</option>
+        <option value="valley">Valley (Ravine)</option>
+      </select>
+    </div>
+    <div>
+      <label for="lr" class="block text-xs text-gray-400 mb-1">Learning Rate: <span id="lrVal">0.05</span></label>
+      <input type="range" id="lr" min="0.005" max="0.2" step="0.005" value="0.05" class="w-full accent-blue-500">
+    </div>
+    <div>
+      <label for="steps" class="block text-xs text-gray-400 mb-1">Max Steps: <span id="stepsVal">100</span></label>
+      <input type="range" id="steps" min="20" max="300" step="10" value="100" class="w-full accent-blue-500">
+    </div>
+  </div>
+
+  <div class="flex gap-2 mb-4 justify-center">
+    <button onclick="runAll()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-medium">Run All Optimizers</button>
+    <button onclick="clearCanvas()" class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded text-sm font-medium">Clear</button>
+  </div>
+
+  <div class="flex flex-wrap gap-4 justify-center mb-3">
+    <div class="flex items-center gap-1"><span class="inline-block w-4 h-1 bg-red-400"></span><span class="text-xs text-gray-300">SGD</span></div>
+    <div class="flex items-center gap-1"><span class="inline-block w-4 h-1 bg-green-400"></span><span class="text-xs text-gray-300">Momentum</span></div>
+    <div class="flex items-center gap-1"><span class="inline-block w-4 h-1 bg-yellow-400"></span><span class="text-xs text-gray-300">Adam</span></div>
+  </div>
+
+  <canvas id="canvas" width="800" height="500" class="w-full rounded border border-gray-700" aria-label="Gradient descent path visualization"></canvas>
+
+  <div id="stats" class="mt-3 grid grid-cols-3 gap-2 text-xs text-center"></div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const MARGIN = 40;
+const GW = W - 2*MARGIN, GH = H - 2*MARGIN;
+
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width || 800;
+  canvas.height = 500;
+}
+
+document.getElementById('lr').oninput = e => document.getElementById('lrVal').textContent = e.target.value;
+document.getElementById('steps').oninput = e => document.getElementById('stepsVal').textContent = e.target.value;
+
+const landscapes = {
+  bowl: (x,y) => 2*x*x + 2*y*y,
+  saddle: (x,y) => x*x - y*y + 0.5*x*y,
+  valley: (x,y) => 0.1*x*x + 10*y*y
+};
+const grads = {
+  bowl: (x,y) => [4*x, 4*y],
+  saddle: (x,y) => [2*x + 0.5*y, -2*y + 0.5*x],
+  valley: (x,y) => [0.2*x, 20*y]
+};
+
+function worldToCanvas(x, y) {
+  const cx = MARGIN + (x + 3) / 6 * GW;
+  const cy = MARGIN + (3 - y) / 6 * GH;
+  return [cx, cy];
+}
+
+function drawLandscape(type) {
+  const f = landscapes[type];
+  const imgData = ctx.createImageData(W, H);
+  for (let px = 0; px < W; px++) {
+    for (let py = 0; py < H; py++) {
+      const x = (px - MARGIN) / GW * 6 - 3;
+      const y = 3 - (py - MARGIN) / GH * 6;
+      const val = f(x, y);
+      const t = Math.max(0, Math.min(1, (val + 5) / 15));
+      const r = Math.floor(20 + t * 50);
+      const g = Math.floor(30 + (1-t) * 60);
+      const b = Math.floor(60 + t * 80);
+      const idx = (py * W + px) * 4;
+      imgData.data[idx] = r;
+      imgData.data[idx+1] = g;
+      imgData.data[idx+2] = b;
+      imgData.data[idx+3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  // Draw contours
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  for (let lv = -4; lv <= 20; lv += 2) {
+    // simplified contour hint via dots
+  }
+}
+
+function runOptimizer(name, gradFn, lr, maxSteps) {
+  const start = [2.5, 2.5];
+  let x = start[0], y = start[1];
+  // Momentum state
+  let vx = 0, vy = 0;
+  // Adam state
+  let mx = 0, my = 0, vvx = 0, vvy = 0;
+  const beta1 = 0.9, beta2 = 0.999, eps = 1e-8;
+  const paths = { SGD: [[x,y]], Momentum: [[x,y]], Adam: [[x,y]] };
+
+  let sx = x, sy = y, mvx = 0, mvy = 0;
+  let amx = 0, amy = 0, avvx = 0, avvy = 0;
+  let ax = x, ay = y;
+
+  for (let t = 1; t <= maxSteps; t++) {
+    const [gx1, gy1] = gradFn(sx, sy);
+    sx -= lr * gx1; sy -= lr * gy1;
+    paths.SGD.push([sx, sy]);
+
+    const [gx2, gy2] = gradFn(mvx !== 0 || mvy !== 0 ? paths.Momentum[t-1][0] : x, paths.Momentum[t-1][1]);
+    let px2 = paths.Momentum[t-1][0], py2 = paths.Momentum[t-1][1];
+    mvx = 0.9*mvx - lr*gx2; mvy = 0.9*mvy - lr*gy2;
+    px2 += mvx; py2 += mvy;
+    paths.Momentum.push([px2, py2]);
+
+    const [gx3, gy3] = gradFn(paths.Adam[t-1][0], paths.Adam[t-1][1]);
+    let px3 = paths.Adam[t-1][0], py3 = paths.Adam[t-1][1];
+    amx = beta1*amx + (1-beta1)*gx3; amy = beta1*amy + (1-beta1)*gy3;
+    avvx = beta2*avvx + (1-beta2)*gx3*gx3; avvy = beta2*avvy + (1-beta2)*gy3*gy3;
+    const mhx = amx/(1-Math.pow(beta1,t)), mhy = amy/(1-Math.pow(beta1,t));
+    const vhx = avvx/(1-Math.pow(beta2,t)), vhy = avvy/(1-Math.pow(beta2,t));
+    px3 -= lr * mhx / (Math.sqrt(vhx)+eps); py3 -= lr * mhy / (Math.sqrt(vhy)+eps);
+    paths.Adam.push([px3, py3]);
+  }
+  return paths;
+}
+
+function drawPath(pts, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const [sx, sy] = worldToCanvas(pts[0][0], pts[0][1]);
+  ctx.moveTo(sx, sy);
+  for (let i = 1; i < pts.length; i++) {
+    const [px, py] = worldToCanvas(pts[i][0], pts[i][1]);
+    ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  // Draw start circle
+  const [ex, ey] = worldToCanvas(pts[pts.length-1][0], pts[pts.length-1][1]);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(ex, ey, 5, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function clearCanvas() {
+  ctx.clearRect(0, 0, W, H);
+  document.getElementById('stats').innerHTML = '';
+}
+
+function runAll() {
+  const type = document.getElementById('landscape').value;
+  const lr = parseFloat(document.getElementById('lr').value);
+  const maxSteps = parseInt(document.getElementById('steps').value);
+
+  ctx.clearRect(0, 0, W, H);
+  drawLandscape(type);
+
+  const f = landscapes[type];
+  const g = grads[type];
+  const paths = runOptimizer(type, g, lr, maxSteps);
+
+  drawPath(paths.SGD, '#f87171');
+  drawPath(paths.Momentum, '#4ade80');
+  drawPath(paths.Adam, '#fbbf24');
+
+  // Labels
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#e5e7eb';
+  ctx.fillText('Start (2.5, 2.5)', MARGIN + 5, MARGIN - 5);
+
+  const statsDiv = document.getElementById('stats');
+  const colors = ['text-red-400', 'text-green-400', 'text-yellow-400'];
+  const names = ['SGD', 'Momentum', 'Adam'];
+  statsDiv.innerHTML = ['SGD', 'Momentum', 'Adam'].map((n, i) => {
+    const last = paths[n][paths[n].length-1];
+    const loss = f(last[0], last[1]).toFixed(4);
+    return `<div class="bg-gray-800 rounded p-2"><div class="${colors[i]} font-semibold">${n}</div><div>Final Loss: ${loss}</div><div class="text-gray-400">x=${last[0].toFixed(3)}, y=${last[1].toFixed(3)}</div></div>`;
+  }).join('');
+}
+
+window.addEventListener('resize', () => { resize(); runAll(); });
+runAll();
+</script>
+</body>
+</html>
